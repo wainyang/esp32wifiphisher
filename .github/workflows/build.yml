@@ -20,14 +20,14 @@ jobs:
 
       - name: Build Firmware and SPIFFS
         run: |
-          pio run -e esp32s3 -v
+          set -e
+          pio run -e esp32s3 -v || (echo "Compile failed! Check for duplicate symbols." && exit 1)
           pio run -e esp32s3 --target buildfs
 
       - name: Parse SPIFFS Offset from CSV
         id: spiffs
         run: |
           PARTITION_CSV=$(grep 'board_build.partitions' platformio.ini | cut -d'=' -f2 | tr -d ' ')
-          # 如果没有自定义 CSV，则使用默认 partitions.csv
           if [ -z "$PARTITION_CSV" ]; then
             PARTITION_CSV="partitions.csv"
           fi
