@@ -18,55 +18,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install platformio esptool
 
-      - name: Build Firmware for ESP32-S3
+      - name: Build Firmware and SPIFFS
         run: |
           pio run -e esp32s3 -v
-          # 打包 SPIFFS
           pio run -e esp32s3 --target buildfs
 
-      - name: Generate Full Flashable Bin
+      - name: Parse SPIFFS Offset from CSV
+        id: spiffs
+        run: |
+          PARTITION_CSV=$(grep 'board_build.partitions' platformio.ini | cut -d'=' -f2 | tr -d ' ')
+          # 如果没有自定义 CSV，则使用默认 partitions.csv
+          if [ -z "$PARTITION_CSV" ]; then
+            PARTITION_CSV="partitions.csv"
+          fi
+          SPIFFS_OFFSET=$(grep SPIFFS $PARTITION_CSV | awk -F, '{print $2}')
+          echo "SPIFFS_OFFSET=$SPIFFS_OFFSET" >> $GITHUB_ENV
+
+      - name: Merge Binaries into Full Flashable
         run: |
           mkdir merged_bin
-          BOOTLOADER_BIN=".pio/build/esp32s3/bootloader.bin"
-          PARTITION_BIN=".pio/build/esp32s3/partition-table.bin"
-          APP_BIN=".pio/build/esp32s3/firmware.bin"
-          SPIFFS_BIN=".pio/build/esp32s3/spiffs.bin"
-
-          # 自动解析 partition table 获取 SPIFFS 起始地址
-          SPIFFS_OFFSET=$(python3 - <<'EOF'
-import sys
-filename = ".pio/build/esp32s3/partition-table.bin"
-with open(filename, "rb") as f:
-    data = f.read()
-# partition table 每条记录 32 bytes，类型 0x01 = app, 0x02 = data, subtype 0x82 = SPIFFS
-SPIFFS_START = None
-for i in range(0, len(data), 32):
-    part_type = data[i]
-    part_subtype = data[i+1]
-    offset = int.from_bytes(data[i+2:i+6], "little")
-    if part_type == 0x01 and part_subtype == 0x82:  # SPIFFS 在某些项目 subtype 0x82
-        SPIFFS_START = offset
-        break
-    # ESP32S3 默认 data subtype = 0x82（SPIFFS）
-    if part_type == 0x02 and part_subtype == 0x82:
-        SPIFFS_START = offset
-        break
-if SPIFFS_START is None:
-    print("0x290000")  # 默认 fallback
-else:
-    print(hex(SPIFFS_START))
-EOF
-)
-
-          echo "SPIFFS offset: $SPIFFS_OFFSET"
-
-          # 合并 bin
           esptool.py merge_bin \
             -o merged_bin/esp32s3_full.bin \
-            0x1000 $BOOTLOADER_BIN \
-            0x8000 $PARTITION_BIN \
-            0x10000 $APP_BIN \
-            $SPIFFS_OFFSET $SPIFFS_BIN
+            0x1000 .pio/build/esp32s3/bootloader.bin \
+            0x8000 .pio/build/esp32s3/partition-table.bin \
+            0x10000 .pio/build/esp32s3/firmware.bin \
+            $SPIFFS_OFFSET .pio/build/esp32s3/spiffs.bin
 
       - name: Upload Merged Firmware
         uses: actions/upload-artifact@v3
